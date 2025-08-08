@@ -1,83 +1,122 @@
 # recovery_dashboard.py
 import streamlit as st
 import numpy as np
+import math
 
-st.set_page_config(page_title="Recovery Dashboard", layout="wide")
-
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="Sleep & Recovery Dashboard", layout="wide")
 st.title("🛌 Sleep & Recovery Estimator")
-st.write("Adjust the sliders to input your weekly averages. The model will estimate your cognitive and muscular recovery.")
+st.caption("An interactive tool to estimate your weekly cognitive and muscular recovery based on sleep & lifestyle inputs.")
 
-# --- INPUT SLIDERS ---
-st.subheader("Sleep Metrics")
-total_sleep = st.slider("Average Total Sleep (hrs)", 4.0, 10.0, 7.5, 0.1)
-deep_sleep = st.slider("Average Deep Sleep (hrs)", 0.5, 3.0, 1.5, 0.1)
-rem_sleep = st.slider("Average REM Sleep (hrs)", 0.5, 3.0, 1.8, 0.1)
-wake_count = st.slider("Average Night Wake-Ups", 0, 6, 2)
-sleep_score = st.slider("Average Sleep Score (Noise Watch)", 0, 100, 80)
-bedtime_var = st.slider("Bedtime Variability (hrs STDEV)", 0.0, 3.0, 0.5, 0.1)
-wake_var = st.slider("Wake Time Variability (hrs STDEV)", 0.0, 3.0, 0.6, 0.1)
+# --- LAYOUT ---
+sleep_col, env_col = st.columns(2)
 
-# --- ENVIRONMENT ---
-st.subheader("Environment Metrics")
-bed_temp = st.slider("Nighttime Bedroom Temp (°C)", 15, 30, 23)
-humidity = st.slider("Bedroom Humidity (%)", 20, 80, 50)
-avg_bedtime = st.slider("Average Bedtime (24h)", 18.0, 2.0+24, 23.0, 0.25, format="%0.2f")
-last_meal = st.slider("Average Last Meal Time (hrs before bed)", 0.0, 5.0, 2.0, 0.25)
-earplugs = st.selectbox("Earplugs Worn", options=[0, 1, 2], format_func=lambda x: f"{x} earplugs")
-screen_time = st.slider("Screen Time after 9 PM (hrs)", 0.0, 4.0, 1.0, 0.1)
+# ----------------------------
+# SLEEP METRICS
+# ----------------------------
+with sleep_col:
+    st.header("😴 Sleep Metrics")
+    total_sleep = st.slider("Average Total Sleep (hrs)", 4.0, 10.0, 7.5, 0.1)
+    deep_sleep = st.slider("Average Deep Sleep (hrs)", 0.5, 3.0, 1.6, 0.1)
+    rem_sleep = st.slider("Average REM Sleep (hrs)", 0.5, 3.0, 1.8, 0.1)
+    wake_count = st.slider("Average Night Wake-Ups", 0, 6, 1)
+    sleep_score = st.slider("Average Sleep Score (Noise Watch)", 0, 100, 82)
+    bedtime_var = st.slider("Bedtime Variability (hrs STDEV)", 0.0, 3.0, 0.5, 0.1)
+    wake_var = st.slider("Wake Time Variability (hrs STDEV)", 0.0, 3.0, 0.6, 0.1)
 
-# --- SIMPLE CALCULATIONS ---
-# Weighting factors for cognitive vs muscular recovery
-cognitive_score = (
-    (total_sleep/8.0)*30 +
-    (deep_sleep/2.0)*20 +
-    (rem_sleep/2.0)*20 +
-    (100 - sleep_score)/-3 +
-    (-(wake_count*2)) +
-    (max(0, 1-bedtime_var))*10 +
-    (max(0, 1-wake_var))*10 -
-    (screen_time*3) +
-    (last_meal*1)
-)
+# ----------------------------
+# ENVIRONMENT & HABITS
+# ----------------------------
+with env_col:
+    st.header("🏠 Environment & Habits")
+    bed_temp = st.slider("Nighttime Bedroom Temp (°C)", 15, 30, 22)
+    humidity = st.slider("Bedroom Humidity (%)", 20, 80, 50)
+    avg_bedtime = st.slider("Average Bedtime (24h)", 18.0, 26.0, 23.0, 0.25, format="%0.2f")
+    last_meal = st.slider("Last Meal Time (hrs before bed)", 0.0, 5.0, 2.0, 0.25)
+    earplugs = st.selectbox("Earplugs Worn", options=[0, 1, 2], format_func=lambda x: f"{x} earplug(s)")
+    screen_time = st.slider("Screen Time after 9 PM (hrs)", 0.0, 4.0, 1.0, 0.1)
 
-muscular_score = (
-    (total_sleep/8.0)*25 +
-    (deep_sleep/2.0)*25 +
-    (humidity >= 40 and humidity <= 60)*5 +
-    (bed_temp >= 18 and bed_temp <= 22)*5 +
-    (100 - sleep_score)/-4 +
-    (max(0, 1-bedtime_var))*10 +
-    (wake_var < 1)*5 -
-    (screen_time*2) +
-    (last_meal*2)
-)
+# ----------------------------
+# RECOVERY FORMULAS
+# ----------------------------
+def calc_cognitive():
+    base = (
+        (total_sleep / 8.0)**0.9 *
+        (deep_sleep / 1.5)**0.8 *
+        (rem_sleep / 1.8)**0.9 *
+        (sleep_score / 85)**1.0 *
+        (1 - (bedtime_var / 3.0))**0.8 *
+        (1 - (wake_var / 3.0))**0.8
+    )
+    # penalties
+    penalty = 1 - (screen_time / 6) - (wake_count * 0.02)
+    return np.clip(base * penalty * 100, 0, 100)
 
-# Normalize
-cognitive_score = np.clip(cognitive_score, 0, 100)
-muscular_score = np.clip(muscular_score, 0, 100)
+def calc_muscular():
+    base = (
+        (total_sleep / 8.0)**0.9 *
+        (deep_sleep / 1.5)**0.85 *
+        (sleep_score / 85)**1.0 *
+        (1 - (bedtime_var / 3.0))**0.85 *
+        (1 - (wake_var / 3.0))**0.85
+    )
+    score = base * 100
 
-# --- OUTPUT ---
-st.subheader("📊 Recovery Estimates")
+    # bonuses
+    if 18 <= bed_temp <= 22:
+        score += 3
+    if 40 <= humidity <= 60:
+        score += 3
+    if screen_time < 1:
+        score += 2
+    if last_meal >= 2:
+        score += 1
+
+    # small penalty for many wake-ups
+    score -= wake_count * 1.5
+
+    return np.clip(score, 0, 100)
+
+cognitive_score = calc_cognitive()
+muscular_score = calc_muscular()
+
+# ----------------------------
+# DISPLAY RESULTS
+# ----------------------------
+st.markdown("---")
+st.header("📊 Recovery Estimates")
+
+def gauge_html(label, value, color):
+    return f"""
+    <div style="text-align:center; margin: 10px;">
+        <h3 style="margin-bottom: -10px;">{label}</h3>
+        <div style="font-size: 40px; font-weight: bold; color: {color};">{value:.1f}%</div>
+        <div style="height: 10px; background-color: #ddd; border-radius: 5px;">
+            <div style="width: {value}%; background-color: {color}; height: 10px; border-radius: 5px;"></div>
+        </div>
+    </div>
+    """
+
 col1, col2 = st.columns(2)
 with col1:
-    st.metric("Cognitive Recovery (%)", f"{cognitive_score:.1f}")
+    col_color = "#2ecc71" if cognitive_score > 80 else "#f39c12" if cognitive_score > 60 else "#e74c3c"
+    st.markdown(gauge_html("🧠 Cognitive Recovery", cognitive_score, col_color), unsafe_allow_html=True)
 with col2:
-    st.metric("Muscular Recovery (%)", f"{muscular_score:.1f}")
+    col_color = "#2ecc71" if muscular_score > 80 else "#f39c12" if muscular_score > 60 else "#e74c3c"
+    st.markdown(gauge_html("💪 Muscular Recovery", muscular_score, col_color), unsafe_allow_html=True)
 
-# Interpretation
-st.write("### Interpretation")
-if cognitive_score > 80:
-    st.success("Cognitive recovery is excellent — your brain is well-rested for focus, memory, and decision-making.")
-elif cognitive_score > 60:
-    st.info("Cognitive recovery is moderate — consider improving deep/REM sleep or reducing nighttime screen use.")
-else:
-    st.warning("Cognitive recovery is poor — your sleep habits or environment may be holding back mental performance.")
+# ----------------------------
+# TIPS
+# ----------------------------
+st.markdown("---")
+st.header("💡 Recovery Tips")
+if muscular_score < 75:
+    st.write("💪 Increase **deep sleep** above 1.5h and keep **bed temp** in 18–22°C range.")
+if cognitive_score < 75:
+    st.write("🧠 Reduce **screen time after 9 PM** and improve **bed/wake consistency**.")
+if bedtime_var > 1:
+    st.write("📅 Try to keep bedtime variation under 1h for optimal circadian alignment.")
+if wake_count > 2:
+    st.write("🌙 Work on reducing night-time wake-ups — consider optimizing room darkness and noise.")
 
-if muscular_score > 80:
-    st.success("Muscular recovery is excellent — you're set for good training adaptation and hypertrophy.")
-elif muscular_score > 60:
-    st.info("Muscular recovery is moderate — fine-tune sleep length, deep sleep, and hydration.")
-else:
-    st.warning("Muscular recovery is poor — training performance and muscle gains may suffer.")
-
-st.caption("This is an estimation tool and not a medical diagnostic. Adjust the weights for your own data and observations.")
+st.caption("Note: These scores are estimates based on known sleep & recovery research. Adjust the formula weights if you have personal data.")
